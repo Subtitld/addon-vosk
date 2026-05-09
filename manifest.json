@@ -1,0 +1,209 @@
+{
+  "manifest_version": 1,
+  "id": "org.subtitld.vosk",
+  "version": "1.0.0",
+  "display_name": "Vosk (offline ASR)",
+  "summary": "Offline speech-to-text using Vosk Kaldi recognizers. Lightweight and CPU-only; models are downloaded on demand.",
+  "author": "Subtitld",
+  "homepage": "https://github.com/Subtitld/vosk",
+  "license": "Apache-2.0",
+  "executable": "bin/vosk-addon",
+  "protocol": 1,
+  "startup_timeout_sec": 30,
+  "platforms": ["linux", "macos", "windows"],
+  "tasks": ["asr.transcribe"],
+  "languages": [
+    "en", "en-us",
+    "pt", "pt-br",
+    "es", "es-es",
+    "fr", "fr-fr",
+    "de", "de-de",
+    "it", "it-it",
+    "ru",
+    "zh", "zh-cn",
+    "ja"
+  ],
+  "models": [
+    {
+      "id": "vosk-model-small-en-us-0.15",
+      "language": "en-us",
+      "display_name": "English (US) — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+      "size_mb": 40,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-en-us-0.22-lgraph",
+      "language": "en-us",
+      "display_name": "English (US) — l-graph",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
+      "size_mb": 128,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-en-us-0.22",
+      "language": "en-us",
+      "display_name": "English (US) — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
+      "size_mb": 1800,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-pt-0.3",
+      "language": "pt-br",
+      "display_name": "Portuguese — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
+      "size_mb": 31,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-pt-fb-v0.1.1-20220516_2113",
+      "language": "pt-br",
+      "display_name": "Portuguese — full (Facebook)",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-pt-fb-v0.1.1-20220516_2113.zip",
+      "size_mb": 1600,
+      "license": "GPL-3.0-only"
+    },
+    {
+      "id": "vosk-model-small-es-0.42",
+      "language": "es",
+      "display_name": "Spanish — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip",
+      "size_mb": 39,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-es-0.42",
+      "language": "es",
+      "display_name": "Spanish — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-es-0.42.zip",
+      "size_mb": 1400,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-fr-0.22",
+      "language": "fr",
+      "display_name": "French — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
+      "size_mb": 41,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-fr-0.22",
+      "language": "fr",
+      "display_name": "French — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-fr-0.22.zip",
+      "size_mb": 1400,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-de-0.15",
+      "language": "de",
+      "display_name": "German — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+      "size_mb": 45,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-de-0.21",
+      "language": "de",
+      "display_name": "German — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-de-0.21.zip",
+      "size_mb": 1900,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-it-0.22",
+      "language": "it",
+      "display_name": "Italian — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
+      "size_mb": 48,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-it-0.22",
+      "language": "it",
+      "display_name": "Italian — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-it-0.22.zip",
+      "size_mb": 1200,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-ru-0.22",
+      "language": "ru",
+      "display_name": "Russian — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
+      "size_mb": 45,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-ru-0.42",
+      "language": "ru",
+      "display_name": "Russian — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-ru-0.42.zip",
+      "size_mb": 1800,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-cn-0.22",
+      "language": "zh-cn",
+      "display_name": "Chinese — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
+      "size_mb": 42,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-cn-0.22",
+      "language": "zh-cn",
+      "display_name": "Chinese — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip",
+      "size_mb": 1300,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "vosk-model-small-ja-0.22",
+      "language": "ja",
+      "display_name": "Japanese — small",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
+      "size_mb": 48,
+      "license": "Apache-2.0",
+      "default": true
+    },
+    {
+      "id": "vosk-model-ja-0.22",
+      "language": "ja",
+      "display_name": "Japanese — full",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-ja-0.22.zip",
+      "size_mb": 1000,
+      "license": "Apache-2.0"
+    }
+  ],
+  "disk_required_mb": 200,
+  "ram_required_mb": 2048,
+  "gpu": "none",
+  "config_schema": {
+    "fields": [
+      {
+        "key": "model",
+        "type": "model_picker",
+        "label": "Vosk model",
+        "description": "Per-language model selection. Small models are ~40 MB and fit on disk easily; full models are 1–2 GB but more accurate."
+      },
+      {
+        "key": "auto_download",
+        "type": "boolean",
+        "label": "Auto-download models on first use",
+        "default": true,
+        "description": "When enabled, the add-on downloads the selected model from alphacephei.com the first time it's needed. Disable to require manual placement."
+      }
+    ]
+  }
+}
