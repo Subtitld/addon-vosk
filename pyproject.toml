@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "vosk>=0.3.45",
+    "vosk>=0.3.44",
 ]
 
 [project.optional-dependencies]
