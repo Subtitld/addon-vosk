@@ -6,5 +6,5 @@ PyInstaller binary (`bin/vosk-addon`).
 """
 
 __version__ = '1.0.0'
-ADDON_ID = 'org.subtitld.vosk'
+ADDON_ID = 'vosk'
 PROTOCOL_VERSION = 1

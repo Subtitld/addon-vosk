@@ -63,7 +63,7 @@ except ImportError as exc:  # pragma: no cover — surfaced via hello_error at r
 else:
     _VOSK_IMPORT_ERROR = None
 
-ADDON_ID = 'org.subtitld.vosk'
+ADDON_ID = 'vosk'
 ADDON_VERSION = '1.0.0'
 PROTOCOL_VERSION = 1
 
