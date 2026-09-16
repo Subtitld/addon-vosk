@@ -16,11 +16,14 @@ take care of it once the binary is built.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
 import sys
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -226,3 +229,99 @@ def test_send_hello_advertises_supported_languages(_capture_frames):
     # mapping, otherwise the host would filter us out for those locales.
     for lang in ('en-us', 'pt-br', 'zh-cn', 'ja'):
         assert lang in asr_cap['languages']
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg must not read the protocol channel
+# ---------------------------------------------------------------------------
+# Stand-in for ffmpeg. Once the test has queued host frames it takes every
+# byte its stdin offers — the worst case of ffmpeg's keyboard polling, which
+# eats queued frames whenever it shares the add-on's stdin.
+_STDIN_EATER = '''
+import json, os, select, sys, time
+from pathlib import Path
+
+work = Path(os.environ['STUB_FFMPEG_DIR'])
+(work / 'started').touch()
+deadline = time.monotonic() + 10
+while not (work / 'go').exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+consumed = 0
+while select.select([0], [], [], 0.5)[0]:
+    chunk = os.read(0, 4096)
+    if not chunk:
+        break
+    consumed += len(chunk)
+(work / 'report.json').write_text(json.dumps({'argv': sys.argv[1:], 'consumed': consumed}))
+Path(sys.argv[-1]).write_bytes(b'RIFF stub')
+'''
+
+
+@contextlib.contextmanager
+def _host_pipe_as_stdin():
+    """Put a fresh pipe on fd 0, where host frames arrive; yield its write end."""
+    read_fd, write_fd = os.pipe()
+    saved = os.dup(0)
+    os.dup2(read_fd, 0)
+    os.close(read_fd)
+    host = os.fdopen(write_fd, 'wb')
+    try:
+        yield host
+    finally:
+        host.close()
+        os.dup2(saved, 0)
+        os.close(saved)
+
+
+def _wait_until_started(marker, job):
+    deadline = time.monotonic() + 10
+    while not marker.exists():
+        if job.done():
+            job.result()  # surfaces the helper's own error
+            raise AssertionError('helper returned without running the stand-in')
+        assert time.monotonic() < deadline, 'stand-in never started'
+        time.sleep(0.01)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the stand-in is a shebang script')
+def test_ffmpeg_does_not_swallow_queued_host_frames(tmp_path, monkeypatch):
+    """A `cancel` sent while audio converts must still reach the dispatcher.
+
+    Driven in-process: with the real dispatcher thread also reading stdin,
+    it races ffmpeg for each frame and a regression would only fail
+    sometimes. Here the stand-in is the only other reader, so it fails
+    every time.
+    """
+    stub = tmp_path / 'ffmpeg'
+    stub.write_text(f'#!{sys.executable}\n{_STDIN_EATER}', encoding='utf-8')
+    stub.chmod(0o755)
+    monkeypatch.setenv('SUBTITLD_FFMPEG_EXECUTABLE', str(stub))
+    monkeypatch.setenv('STUB_FFMPEG_DIR', str(tmp_path))
+    src = tmp_path / 'in.mp3'
+    src.write_bytes(b'ID3')
+
+    sent = [
+        {'type': 'cancel', 'target': 'r1'},
+        {'type': 'asr.transcribe', 'id': 'r2', 'params': {'audio_path': str(src)}},
+        {'type': 'cancel', 'target': 'r2'},
+        {'type': 'shutdown'},
+    ]
+    received = []
+    with _host_pipe_as_stdin() as host, ThreadPoolExecutor(1) as pool:
+        job = pool.submit(addon._convert_to_pcm16k_mono, str(src), str(tmp_path / 'out.wav'))
+        _wait_until_started(tmp_path / 'started', job)
+        for frame in sent:
+            host.write((json.dumps(frame) + '\n').encode())
+        host.close()
+        (tmp_path / 'go').touch()
+        job.result(timeout=30)
+
+        with open(0, encoding='utf-8', closefd=False) as stdin:
+            monkeypatch.setattr(sys, 'stdin', stdin)
+            while (frame := addon._read_frame_blocking()) is not None:
+                received.append(frame)
+
+    assert received == sent, 'host frames were lost while ffmpeg ran'
+    report = json.loads((tmp_path / 'report.json').read_text(encoding='utf-8'))
+    assert report['consumed'] == 0, 'ffmpeg was handed the protocol stdin'
+    assert '-nostdin' in report['argv']

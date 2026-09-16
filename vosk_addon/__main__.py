@@ -64,7 +64,7 @@ else:
     _VOSK_IMPORT_ERROR = None
 
 ADDON_ID = 'vosk'
-ADDON_VERSION = '1.0.0'
+ADDON_VERSION = '1.0.1'
 PROTOCOL_VERSION = 1
 
 # ---------------------------------------------------------------------------
@@ -303,9 +303,11 @@ def _convert_to_pcm16k_mono(src: str, dst: str) -> None:
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0  # SW_HIDE
 
+    # `-nostdin` plus stdin=DEVNULL: ffmpeg polls stdin for keystrokes, and
+    # ours carries host frames — a `cancel` sent mid-conversion would vanish.
     proc = subprocess.run(
         [
-            ffmpeg, '-y',
+            ffmpeg, '-nostdin', '-y',
             '-i', src,
             '-acodec', 'pcm_s16le',
             '-ar', '16000',
@@ -313,6 +315,7 @@ def _convert_to_pcm16k_mono(src: str, dst: str) -> None:
             '-f', 'wav',
             dst,
         ],
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         startupinfo=startupinfo,
