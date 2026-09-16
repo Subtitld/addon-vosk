@@ -219,7 +219,7 @@ def test_send_hello_advertises_supported_languages(_capture_frames):
     hello = frames[0]
     assert hello['type'] == 'hello'
     assert hello['protocol'] == 1
-    assert hello['addon'] == 'org.subtitld.vosk'
+    assert hello['addon'] == 'vosk'
     assert any(c['task'] == 'asr.transcribe' for c in hello['capabilities'])
     asr_cap = [c for c in hello['capabilities'] if c['task'] == 'asr.transcribe'][0]
     # Sanity-check: we must advertise at least the languages from the default
