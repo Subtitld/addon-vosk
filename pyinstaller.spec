@@ -18,6 +18,7 @@ archive consumed by Subtitld's AddonsDialog (`Install from file…`).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,14 @@ from pathlib import Path
 # root from the spec's own location so `pyinstaller` can be invoked from
 # anywhere.
 SPEC_ROOT = Path(SPECPATH).resolve()
+
+# certifi supplies the CA bundle the model download is verified against (see
+# `_https_context`). Without it the build still succeeds and the binary still
+# starts, then fails every download on machines whose CA store is not where
+# the build host keeps it. Fail here instead.
+if importlib.util.find_spec('certifi') is None:
+    raise SystemExit('FATAL: certifi is not installed. '
+                     "Run `pip install -e '.[build]'` first.")
 
 
 def _vosk_runtime_binaries() -> list[tuple[str, str]]:
@@ -56,6 +65,9 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         'vosk',
+        # Imported inside `_https_context`; named here so it can't be missed.
+        # Its hook (pyinstaller-hooks-contrib) copies cacert.pem.
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},
@@ -96,6 +108,10 @@ def _drop_bundled_libexpat(entries):
 
 
 a.binaries = _drop_bundled_libexpat(a.binaries)
+
+if not any(dest.replace('\\', '/') == 'certifi/cacert.pem' for dest, *_ in a.datas):
+    raise SystemExit('FATAL: certifi/cacert.pem was not collected; '
+                     'is pyinstaller-hooks-contrib installed?')
 
 pyz = PYZ(a.pure, a.zipped_data)
 

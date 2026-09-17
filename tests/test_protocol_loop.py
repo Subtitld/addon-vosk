@@ -20,10 +20,15 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import ssl
+import subprocess
 import sys
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -325,3 +330,221 @@ def test_ffmpeg_does_not_swallow_queued_host_frames(tmp_path, monkeypatch):
     report = json.loads((tmp_path / 'report.json').read_text(encoding='utf-8'))
     assert report['consumed'] == 0, 'ffmpeg was handed the protocol stdin'
     assert '-nostdin' in report['argv']
+
+
+# ---------------------------------------------------------------------------
+# TLS: the frozen build's OpenSSL may find no system CA store at all
+# ---------------------------------------------------------------------------
+HAS_OPENSSL = shutil.which('openssl') is not None
+MODEL_ID = 'vosk-model-small-en-us-0.15'  # the en-us default
+
+
+@pytest.fixture
+def fresh_https_context():
+    """`_https_context` is cached per process; these tests change its inputs."""
+    addon._https_context.cache_clear()
+    yield
+    addon._https_context.cache_clear()
+
+
+def _no_system_ca_store(monkeypatch, tmp_path):
+    """What the frozen OpenSSL sees on a machine laid out unlike the build host."""
+    monkeypatch.setenv('SSL_CERT_FILE', str(tmp_path / 'no-such-ca-file.pem'))
+    monkeypatch.setenv('SSL_CERT_DIR', str(tmp_path / 'no-such-ca-dir'))
+
+
+@pytest.fixture(scope='module')
+def test_ca(tmp_path_factory):
+    """A throwaway CA, and a certificate for 127.0.0.1 signed by it.
+
+    certifi has never heard of this CA, so trusting it proves the system
+    store is still consulted alongside certifi.
+    """
+    if not HAS_OPENSSL:
+        pytest.skip('openssl CLI not installed')
+    d = tmp_path_factory.mktemp('tls')
+
+    def openssl(*args):
+        subprocess.run(['openssl', *args], cwd=d, check=True, capture_output=True)
+
+    openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+            '-subj', '/CN=Subtitld add-on test CA',
+            '-addext', 'basicConstraints=critical,CA:TRUE',
+            '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
+            '-keyout', 'ca.key', '-out', 'ca.pem')
+    openssl('req', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=127.0.0.1',
+            '-keyout', 'server.key', '-out', 'server.csr')
+    # Python 3.13+ verifies in X509-strict mode, which wants these extensions.
+    (d / 'server.ext').write_text(
+        'basicConstraints=critical,CA:FALSE\n'
+        'keyUsage=critical,digitalSignature,keyEncipherment\n'
+        'extendedKeyUsage=serverAuth\n'
+        'subjectAltName=IP:127.0.0.1\n'
+        'subjectKeyIdentifier=hash\n'
+        'authorityKeyIdentifier=keyid,issuer\n')
+    openssl('x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key',
+            '-set_serial', '1', '-days', '2', '-extfile', 'server.ext',
+            '-out', 'server.pem')
+    return d
+
+
+class _ModelHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):  # keep pytest output clean
+        pass
+
+    def do_GET(self):
+        body = self.server.payload
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture
+def tls_model_server(test_ca, monkeypatch, tmp_path):
+    """alphacephei.com stand-in behind HTTPS, serving a tiny model zip.
+
+    The en-us default model is pointed at it, and the data dir sandboxed.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        zf.writestr(f'{MODEL_ID}/README', 'stub model')
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _ModelHandler)
+    server.daemon_threads = True
+    server.payload = buf.getvalue()
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(test_ca / 'server.pem', test_ca / 'server.key')
+    # Handshakes run inside accept(), where a client's rejection is dropped
+    # quietly instead of printing a traceback from a handler thread.
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f'https://127.0.0.1:{server.server_address[1]}/{MODEL_ID}.zip'
+    monkeypatch.setitem(addon._MODEL_CATALOG, MODEL_ID, {'url': url, 'language': 'en-us'})
+    monkeypatch.setenv('SUBTITLD_VOSK_DATA_DIR', str(tmp_path / 'addon-data'))
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def _transcribe_en(tmp_path) -> None:
+    audio = tmp_path / 'in.wav'
+    audio.write_bytes(b'\x00' * 16)
+    addon._handle_transcribe(addon._WorkerState('r1'), {
+        'audio_path': str(audio), 'language': 'en-us', 'options': {},
+    })
+
+
+@pytest.mark.skipif(sys.platform == 'win32',
+                    reason='Python on Windows reads the system store directly')
+def test_certifi_is_trusted_when_the_system_store_is_missing(
+        fresh_https_context, monkeypatch, tmp_path):
+    import certifi
+
+    _no_system_ca_store(monkeypatch, tmp_path)
+    assert ssl.create_default_context().cert_store_stats()['x509_ca'] == 0, \
+        'precondition: the env vars must hide the system store'
+    bundled = ssl.create_default_context(cafile=certifi.where())
+    assert (addon._https_context().cert_store_stats()['x509_ca']
+            == bundled.cert_store_stats()['x509_ca'])
+
+
+def test_model_download_still_trusts_the_system_store(
+        fresh_https_context, tls_model_server, test_ca, monkeypatch, tmp_path):
+    """certifi is added to the system store, not swapped in for it.
+
+    `cafile=certifi.where()` alone would reject a CA only the system trusts,
+    such as a corporate proxy's. Here SSL_CERT_FILE plays the system store
+    and holds a CA certifi does not know.
+    """
+    monkeypatch.setenv('SSL_CERT_FILE', str(test_ca / 'ca.pem'))
+    monkeypatch.setenv('SSL_CERT_DIR', str(tmp_path / 'no-such-ca-dir'))
+    model_dir = addon._ensure_model(MODEL_ID, auto_download=True, req_id='r1',
+                                    cancel_flag=threading.Event())
+    assert (model_dir / 'README').read_text() == 'stub model'
+
+
+def test_untrusted_certificate_is_not_reported_as_a_network_fault(
+        _capture_frames, fresh_https_context, tls_model_server, monkeypatch, tmp_path):
+    _no_system_ca_store(monkeypatch, tmp_path)
+    _transcribe_en(tmp_path)
+    err = _read_frames(_capture_frames)[-1]
+    assert err['type'] == 'error'
+    assert err['code'] == addon.ERR_NETWORK_UNAVAILABLE
+    assert err['message'].startswith(
+        'Could not verify the security certificate of 127.0.0.1')
+    assert 'date and time' in err['message']
+    # The same certificate comes back on every retry.
+    assert err['retryable'] is False
+
+
+def test_plain_network_errors_stay_retryable(_capture_frames, monkeypatch, tmp_path):
+    # Nothing listens on the discard port.
+    monkeypatch.setitem(addon._MODEL_CATALOG, MODEL_ID,
+                        {'url': 'http://127.0.0.1:9/model.zip', 'language': 'en-us'})
+    monkeypatch.setenv('SUBTITLD_VOSK_DATA_DIR', str(tmp_path / 'addon-data'))
+    _transcribe_en(tmp_path)
+    err = _read_frames(_capture_frames)[-1]
+    assert err['code'] == addon.ERR_NETWORK_UNAVAILABLE
+    assert 'certificate' not in err['message']
+    assert err['retryable'] is True
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg must not inherit the frozen bundle's library path
+# ---------------------------------------------------------------------------
+# Stand-in for ffmpeg that refuses to run with the bundle on LD_LIBRARY_PATH
+# — the real one would load the bundle's older libssl and libz, and fail to
+# start on a distro newer than the build runner.
+_LIBRARY_PATH_CHECKER = '''
+import json, os, sys
+from pathlib import Path
+
+seen = os.environ.get('LD_LIBRARY_PATH')
+Path(os.environ['STUB_FFMPEG_DIR'], 'report.json').write_text(
+    json.dumps({'LD_LIBRARY_PATH': seen}))
+if seen is not None and os.environ['STUB_BUNDLE_LIBS'] in seen.split(os.pathsep):
+    sys.exit(f'started with the bundle on LD_LIBRARY_PATH: {seen}')
+Path(sys.argv[-1]).write_bytes(b'RIFF stub')
+'''
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'),
+                    reason='PyInstaller rewrites LD_LIBRARY_PATH on Linux only')
+@pytest.mark.parametrize('users_value', [None, '/opt/users/lib'])
+def test_ffmpeg_does_not_inherit_the_bundle_library_path(
+        users_value, tmp_path, monkeypatch):
+    """Frozen, the bootloader has put `_internal` first on LD_LIBRARY_PATH
+    and saved any earlier value in LD_LIBRARY_PATH_ORIG. ffmpeg must see the
+    user's value again, or no variable at all if they had none."""
+    bundle_libs = tmp_path / 'vosk-addon' / '_internal'
+    bundle_libs.mkdir(parents=True)
+    stub = tmp_path / 'ffmpeg'
+    stub.write_text(f'#!{sys.executable}\n{_LIBRARY_PATH_CHECKER}', encoding='utf-8')
+    stub.chmod(0o755)
+
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    if users_value is None:
+        monkeypatch.setenv('LD_LIBRARY_PATH', str(bundle_libs))
+        monkeypatch.delenv('LD_LIBRARY_PATH_ORIG', raising=False)
+    else:
+        monkeypatch.setenv('LD_LIBRARY_PATH', f'{bundle_libs}{os.pathsep}{users_value}')
+        monkeypatch.setenv('LD_LIBRARY_PATH_ORIG', users_value)
+    monkeypatch.setenv('SUBTITLD_FFMPEG_EXECUTABLE', str(stub))
+    monkeypatch.setenv('STUB_FFMPEG_DIR', str(tmp_path))
+    monkeypatch.setenv('STUB_BUNDLE_LIBS', str(bundle_libs))
+    src = tmp_path / 'in.mp3'
+    src.write_bytes(b'ID3')
+
+    # Raises when the stand-in refuses to run.
+    addon._convert_to_pcm16k_mono(str(src), str(tmp_path / 'out.wav'))
+    report = json.loads((tmp_path / 'report.json').read_text(encoding='utf-8'))
+    assert report['LD_LIBRARY_PATH'] == users_value
+
+
+def test_unfrozen_runs_pass_the_environment_through(monkeypatch):
+    """From source there is no bundle, and a developer's LD_LIBRARY_PATH is
+    theirs to keep."""
+    monkeypatch.delattr(sys, 'frozen', raising=False)
+    assert addon._tool_env() is None

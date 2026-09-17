@@ -57,8 +57,12 @@ python -m venv .venv
 . .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -e '.[build]'
 
-# 2. Build the redistributable bundle.
+# 2. Build the redistributable bundle, then smoke-test it (CI does this
+#    after every Linux and macOS build): with no system CA store, as on
+#    macOS, Fedora/Arch or the Flatpak runtime, the model download must
+#    still verify, and ffmpeg must not inherit the bundle's LD_LIBRARY_PATH.
 pyinstaller pyinstaller.spec --noconfirm
+python tools/smoke_frozen.py dist/vosk-addon/vosk-addon
 
 # 3. Pack into the release zip Subtitld expects.
 PLATFORM=$(python -c 'import platform, sys; print({"linux":"linux","darwin":"macos","win32":"windows"}[sys.platform])')
@@ -116,6 +120,8 @@ for the spec. Briefly, it:
 │   └── __main__.py                # protocol loop + worker
 ├── tests/
 │   └── test_protocol_loop.py
+├── tools/
+│   └── smoke_frozen.py            # runs the built binary as a user's machine would
 └── .github/workflows/release.yml  # builds + uploads zip on tag push
 ```
 

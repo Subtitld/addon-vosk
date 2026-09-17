@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "subtitld-addon-vosk"
-version = "1.0.1"
+version = "1.0.2"
 description = "Subtitld add-on: offline ASR via Vosk"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -14,6 +14,12 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "vosk>=0.3.44",
+    # The model download verifies alphacephei.com against certifi's bundle as
+    # well as the system's: the frozen build's OpenSSL looks for CAs where the
+    # build machine kept them, so on macOS, Fedora/Arch and the Flatpak
+    # runtime it finds none. vosk pulls certifi in today (via requests), but
+    # the add-on imports it itself.
+    "certifi",
 ]
 
 [project.optional-dependencies]

@@ -33,6 +33,7 @@ ASR requests to one provider at a time (see `AddonASRProvider.cancel`).
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import json
@@ -41,12 +42,15 @@ import os
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 import zipfile
@@ -64,7 +68,7 @@ else:
     _VOSK_IMPORT_ERROR = None
 
 ADDON_ID = 'vosk'
-ADDON_VERSION = '1.0.1'
+ADDON_VERSION = '1.0.2'
 PROTOCOL_VERSION = 1
 
 # ---------------------------------------------------------------------------
@@ -288,6 +292,28 @@ def _find_ffmpeg() -> str | None:
     )
 
 
+def _tool_env() -> dict[str, str] | None:
+    """Environment for ffmpeg; None inherits ours unchanged.
+
+    The frozen Linux build's bootloader points LD_LIBRARY_PATH at the
+    bundle's `_internal` so the add-on finds its own libraries. A system
+    ffmpeg that inherits it loads our libssl, libz and friends (from the
+    build runner) instead of its own, and fails to start on a distro newer
+    than the runner. PyInstaller keeps the user's value in
+    LD_LIBRARY_PATH_ORIG; restoring it, or dropping the variable when there
+    was none, is its documented fix for child processes.
+    """
+    if not (getattr(sys, 'frozen', False) and sys.platform.startswith('linux')):
+        return None
+    env = dict(os.environ)
+    original = env.get('LD_LIBRARY_PATH_ORIG')
+    if original is not None:
+        env['LD_LIBRARY_PATH'] = original
+    else:
+        env.pop('LD_LIBRARY_PATH', None)
+    return env
+
+
 def _convert_to_pcm16k_mono(src: str, dst: str) -> None:
     """Re-encode any input to 16 kHz mono signed-16 WAV. Vosk requires this
     exact format; sending anything else either errors or produces garbage."""
@@ -318,6 +344,7 @@ def _convert_to_pcm16k_mono(src: str, dst: str) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        env=_tool_env(),
         startupinfo=startupinfo,
     )
     if proc.returncode != 0:
@@ -348,6 +375,44 @@ def _resolve_model_id(language: str, options: dict) -> str | None:
     if '-' in lang:
         return _DEFAULT_MODEL_BY_LANGUAGE.get(lang.split('-', 1)[0])
     return None
+
+
+@functools.lru_cache(maxsize=1)
+def _https_context() -> ssl.SSLContext:
+    """TLS context that trusts the system's CAs plus certifi's bundle.
+
+    The frozen build carries its own OpenSSL, which looks for CA certificates
+    where the *build* machine keeps them (`/usr/lib/ssl` on the Ubuntu
+    runner, an empty python.org framework path on macOS). On macOS, Fedora,
+    Arch or the Flatpak runtime that path holds nothing, and every model
+    download failed with CERTIFICATE_VERIFY_FAILED. certifi's bundle ships
+    inside the add-on, so it is always there; the system store is kept too,
+    so a CA the user trusts locally (a corporate proxy's, say) still verifies.
+    """
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except Exception as exc:
+        log.warning('certifi CA bundle unavailable, trusting system CAs only: %s', exc)
+    return ctx
+
+
+def _cert_error(exc: BaseException | None) -> ssl.SSLCertVerificationError | None:
+    """The certificate failure behind a urllib error, if that is what it is."""
+    reason = getattr(exc, 'reason', exc)
+    return reason if isinstance(reason, ssl.SSLCertVerificationError) else None
+
+
+def _cert_error_message(url: str, cert: ssl.SSLCertVerificationError) -> str:
+    """What to tell the user. OpenSSL's own text reads like a network fault,
+    and sends them off to check a connection that works."""
+    host = urllib.parse.urlsplit(url).hostname or url
+    detail = getattr(cert, 'verify_message', '') or str(cert)
+    return (f'Could not verify the security certificate of {host} ({detail}). '
+            "Check that this computer's date and time are correct. If a proxy "
+            'or antivirus inspects HTTPS traffic, its certificate must be '
+            'trusted by the system.')
 
 
 def _model_path(model_id: str) -> Path:
@@ -385,7 +450,7 @@ def _ensure_model(model_id: str, *, auto_download: bool, req_id: str, cancel_fla
         shutil.rmtree(extract_tmp, ignore_errors=True)
 
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
+        with urllib.request.urlopen(url, timeout=30, context=_https_context()) as resp:
             total = int(resp.headers.get('Content-Length') or 0)
             downloaded = 0
             chunk = 1024 * 1024  # 1 MiB
@@ -404,6 +469,10 @@ def _ensure_model(model_id: str, *, auto_download: bool, req_id: str, cancel_fla
                         _emit_progress(req_id, 0.5 * (downloaded / total),
                                        f'Downloading {model_id} ({downloaded // (1024 * 1024)}/{total // (1024 * 1024)} MiB)')
     except urllib.error.URLError as exc:
+        cert = _cert_error(exc)
+        if cert is not None:
+            raise RuntimeError(
+                f'{ERR_NETWORK_UNAVAILABLE}: {_cert_error_message(url, cert)}') from exc
         raise RuntimeError(f'{ERR_NETWORK_UNAVAILABLE}: {exc.reason}') from exc
     except OSError as exc:
         # ENOSPC etc.
@@ -542,7 +611,9 @@ def _handle_transcribe(state: _WorkerState, params: dict) -> None:
         # Helper raises with `code: detail`. Split safely.
         code, _, detail = msg.partition(':')
         code = code.strip() or ERR_INTERNAL
-        _emit_error(req_id, code, detail.strip() or msg, retryable=(code == ERR_NETWORK_UNAVAILABLE))
+        # A certificate that won't verify won't verify on a retry either.
+        retryable = code == ERR_NETWORK_UNAVAILABLE and _cert_error(exc.__cause__) is None
+        _emit_error(req_id, code, detail.strip() or msg, retryable=retryable)
         return
 
     if state.cancel_flag.is_set():
