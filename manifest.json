@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "id": "vosk",
-  "version": "1.0.2",
+  "version": "26.11.1",
   "display_name": "Vosk (offline ASR)",
   "summary": "Offline speech-to-text using Vosk Kaldi recognizers. Lightweight and CPU-only; models are downloaded on demand.",
   "author": "Subtitld",

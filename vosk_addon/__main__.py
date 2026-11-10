@@ -68,7 +68,7 @@ else:
     _VOSK_IMPORT_ERROR = None
 
 ADDON_ID = 'vosk'
-ADDON_VERSION = '1.0.2'
+ADDON_VERSION = '26.11.1'
 PROTOCOL_VERSION = 1
 
 # ---------------------------------------------------------------------------
