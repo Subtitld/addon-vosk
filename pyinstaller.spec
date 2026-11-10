@@ -52,7 +52,10 @@ def _vosk_runtime_binaries() -> list[tuple[str, str]]:
         return []
     pkg_dir = Path(vosk.__file__).parent
     out: list[tuple[str, str]] = []
-    for pattern in ('*.so', '*.dylib', '*.dll'):
+    # The macOS wheel calls it libvosk.dyld, not .dylib, which is what the
+    # package's own open_dll() looks for: without it the frozen bundle on
+    # macOS has no libvosk at all and dies on `import vosk`.
+    for pattern in ('*.so', '*.dylib', '*.dyld', '*.dll'):
         for path in pkg_dir.glob(pattern):
             out.append((str(path), 'vosk'))
     return out
