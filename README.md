@@ -70,7 +70,7 @@ ARCH=$(python -c 'import platform; print({"x86_64":"x86_64","AMD64":"x86_64","ar
 mkdir -p release-staging
 cp -r dist/vosk-addon release-staging/
 cp manifest.json LICENSE README.md release-staging/vosk-addon/
-( cd release-staging && zip -r "../org.subtitld.vosk-26.11.1-${PLATFORM}-${ARCH}.zip" vosk-addon )
+( cd release-staging && zip -r "../vosk-26.11.1-${PLATFORM}-${ARCH}.zip" vosk-addon )
 ```
 
 The resulting `org.subtitld.vosk-<version>-<platform>-<arch>.zip` is the
